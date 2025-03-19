@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   CallControls,
   CallParticipantsList,
@@ -10,9 +10,9 @@ import {
   useCallStateHooks,
 } from '@stream-io/video-react-sdk';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Users, LayoutList, Code, Play } from 'lucide-react';
+import { Users, LayoutList, Code, Play, MessageSquare } from 'lucide-react';
 import Editor from '@monaco-editor/react';
-
+import io, { Socket } from 'socket.io-client';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,28 +24,34 @@ import Loader from './Loader';
 import EndCallButton from './EndCallButton';
 import { cn } from '@/lib/utils';
 
+const socket: Socket = io('http://localhost:5000');
+
 type CallLayoutType = 'grid' | 'speaker-left' | 'speaker-right';
+type ChatMessage = { sender: string; message: string; timestamp: string };
 
 const sampleAppContent = `console.log('Hello, World!');\nfunction add(a, b) {\n  return a + b;\n}\nconsole.log(add(5, 3));`;
 
-const MeetingRoom = () => {
+const MeetingRoom: React.FC = () => {
   const searchParams = useSearchParams();
-  const isPersonalRoom = !!searchParams.get('personal');
+  const isPersonalRoom = !!searchParams?.get('personal');
   const router = useRouter();
   const [layout, setLayout] = useState<CallLayoutType>('speaker-left');
   const [showParticipants, setShowParticipants] = useState(false);
   const [showCodeEditor, setShowCodeEditor] = useState(false);
-  const [codeContent, setCodeContent] = useState(sampleAppContent);
-  const [language, setLanguage] = useState('javascript');
-  const [output, setOutput] = useState('');
+  const [codeContent, setCodeContent] = useState<string>(sampleAppContent);
+  const [language, setLanguage] = useState<string>('javascript');
+  const [output, setOutput] = useState<string>('');
   const [isRunning, setIsRunning] = useState(false);
-  const [alertMessage, setAlertMessage] = useState<string | null>(null); // State for custom alert
+  const [alertMessage, setAlertMessage] = useState<string | null>(null);
+  const [showChat, setShowChat] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messageInput, setMessageInput] = useState('');
   const { useCallCallingState } = useCallStateHooks();
 
   const callingState = useCallCallingState();
+  const roomId = searchParams?.get('room') || 'default-room';
 
-  // Updated language map with versions supported by Piston (emkc.org)
-  const languageMap = {
+  const languageMap: Record<string, string> = {
     javascript: 'node@18.15.0',
     typescript: 'node@18.15.0',
     python: 'python@3.10.0',
@@ -55,61 +61,22 @@ const MeetingRoom = () => {
     css: 'css',
   };
 
-  // Disable Alt+Tab, Ctrl+Tab, and Escape keys with alerts
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Prevent Escape key
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setAlertMessage('Escape key is disabled during the meeting.');
-        console.log('Escape key disabled');
-      }
+  const handleCodeChange = useCallback((value: string | undefined) => {
+    const newCode = value || '';
+    setCodeContent(newCode);
+    socket.emit('codeChange', { room: roomId, code: newCode });
+  }, [roomId]);
 
-      // Prevent Ctrl+Tab
-      if (event.ctrlKey && event.key === 'Tab') {
-        event.preventDefault();
-        setAlertMessage('Ctrl+Tab is disabled during the meeting.');
-        console.log('Ctrl+Tab disabled');
-      }
-
-      // Attempt to prevent Alt+Tab (limited effectiveness)
-      if (event.altKey && event.key === 'Tab') {
-        event.preventDefault();
-        setAlertMessage('Alt+Tab is disabled during the meeting (browser may override).');
-        console.log('Alt+Tab disabled (browser may override)');
-      }
-    };
-
-    // Add event listener to the document
-    document.addEventListener('keydown', handleKeyDown);
-
-    // Cleanup event listener on component unmount
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, []);
-
-  // Clear alert message after 3 seconds
-  useEffect(() => {
-    if (alertMessage) {
-      const timer = setTimeout(() => setAlertMessage(null), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [alertMessage]);
-
-  const handleLanguageChange = (newLanguage: string) => {
-    setLanguage(newLanguage);
-    setOutput('');
-  };
-
-  const handleRunCode = async () => {
+  const executeCode = useCallback(async () => {
     if (!codeContent.trim()) {
       setOutput('Error: No code to run');
+      socket.emit('outputUpdate', { room: roomId, output: 'Error: No code to run', isRunning: false });
       return;
     }
 
     setIsRunning(true);
     setOutput('Running...');
+    socket.emit('outputUpdate', { room: roomId, output: 'Running...', isRunning: true });
 
     const languageVersion = languageMap[language] || 'node@18.15.0';
     const [lang, version] = languageVersion.split('@');
@@ -117,18 +84,11 @@ const MeetingRoom = () => {
     try {
       const response = await fetch('https://emkc.org/api/v2/piston/execute', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           language: lang,
           version: version,
-          files: [
-            {
-              name: `main.${lang === 'cpp' ? 'cpp' : lang === 'java' ? 'java' : 'js'}`,
-              content: codeContent,
-            },
-          ],
+          files: [{ name: `main.${lang === 'cpp' ? 'cpp' : lang === 'java' ? 'java' : 'js'}`, content: codeContent }],
           stdin: '',
           args: [],
           compile_timeout: 10000,
@@ -142,28 +102,182 @@ const MeetingRoom = () => {
       }
 
       const result = await response.json();
-      console.log('Piston Result:', result);
-
       const outputText = result.run.stdout || result.run.stderr || 'No output';
       setOutput(outputText);
-    } catch (error) {
-      console.error('Execution Error:', error);
-      setOutput(`Error: ${error.message}`);
+      socket.emit('outputUpdate', { room: roomId, output: outputText, isRunning: false });
+    } catch (error: unknown) {
+      const errorMessage = `Error: ${(error as Error).message}`;
+      setOutput(errorMessage);
+      socket.emit('outputUpdate', { room: roomId, output: errorMessage, isRunning: false });
     } finally {
       setIsRunning(false);
     }
-  };
+  }, [codeContent, language, roomId]);
+
+  useEffect(() => {
+    const handleCodeUpdate = (newCode: string) => setCodeContent(newCode);
+    const handleOutputUpdate = ({ output: newOutput, isRunning: runningState }: { output: string; isRunning: boolean }) => {
+      setOutput(newOutput);
+      setIsRunning(runningState);
+    };
+    const handleRunCode = () => executeCode();
+
+    socket.on('codeUpdate', handleCodeUpdate);
+    socket.on('outputUpdate', handleOutputUpdate);
+    socket.on('runCode', handleRunCode);
+    socket.emit('joinRoom', { room: roomId });
+
+    return () => {
+      socket.off('codeUpdate', handleCodeUpdate);
+      socket.off('outputUpdate', handleOutputUpdate);
+      socket.off('runCode', handleRunCode);
+    };
+  }, [roomId]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+    // Block Escape key (exits fullscreen or closes dialogs)
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setAlertMessage('Escape key is disabled during the meeting.');
+    }
+
+    // Block F11 (toggles fullscreen)
+    if (event.key === 'F11') {
+      event.preventDefault();
+      setAlertMessage('F11 key is disabled during the meeting.');
+    }
+
+    // Block Alt+Tab (switch tabs/apps, may not work due to OS-level handling)
+    if (event.altKey && event.key === 'Tab') {
+      event.preventDefault();
+      setAlertMessage('Alt+Tab is disabled during the meeting (browser may override).');
+    }
+
+    // Block Ctrl+Tab (switch tabs)
+    if (event.ctrlKey && event.key === 'Tab') {
+      event.preventDefault();
+      setAlertMessage('Ctrl+Tab is disabled during the meeting.');
+    }
+
+    // Block Cmd+Tab on macOS (switch apps, may not work due to OS-level handling)
+    if (event.metaKey && event.key === 'Tab') {
+      event.preventDefault();
+      setAlertMessage('Cmd+Tab is disabled during the meeting (browser may override).');
+    }
+
+    // Block Alt+F4 (close window, may not work in all browsers)
+    if (event.altKey && event.key === 'F4') {
+      event.preventDefault();
+      setAlertMessage('Alt+F4 is disabled during the meeting.');
+    }
+
+    // Block Ctrl+W or Cmd+W (close tab/window)
+    if ((event.ctrlKey || event.metaKey) && event.key === 'w') {
+      event.preventDefault();
+      setAlertMessage('Ctrl+W/Cmd+W is disabled during the meeting.');
+    }
+
+    // Block Ctrl+T or Cmd+T (new tab)
+    if ((event.ctrlKey || event.metaKey) && event.key === 't') {
+      event.preventDefault();
+      setAlertMessage('Ctrl+T/Cmd+T is disabled during the meeting.');
+    }
+
+    // Block Ctrl+N or Cmd+N (new window)
+    if ((event.ctrlKey || event.metaKey) && event.key === 'n') {
+      event.preventDefault();
+      setAlertMessage('Ctrl+N/Cmd+N is disabled during the meeting.');
+    }
+
+    // Block Ctrl+R or Cmd+R (refresh page)
+    if ((event.ctrlKey || event.metaKey) && event.key === 'r') {
+      event.preventDefault();
+      setAlertMessage('Ctrl+R/Cmd+R is disabled during the meeting.');
+    }
+
+    // Block F5 (refresh page)
+    if (event.key === 'F5') {
+      event.preventDefault();
+      setAlertMessage('F5 key is disabled during the meeting.');
+    }
+
+    // Block Ctrl+Shift+T or Cmd+Shift+T (reopen closed tab)
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'T') {
+      event.preventDefault();
+      setAlertMessage('Ctrl+Shift+T/Cmd+Shift+T is disabled during the meeting.');
+    }
+
+    // Block Ctrl+Shift+N or Cmd+Shift+N (new incognito window)
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'N') {
+      event.preventDefault();
+      setAlertMessage('Ctrl+Shift+N/Cmd+Shift+N is disabled during the meeting.');
+    }
+
+    // Block Windows key (or Cmd on macOS) to prevent opening Start menu or Spotlight
+    if (event.key === 'Meta' || event.metaKey) {
+      event.preventDefault();
+      setAlertMessage('Windows/Cmd key is disabled during the meeting.');
+    }
+
+    // Block Ctrl+Shift+I or Cmd+Option+I (open developer tools)
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && (event.key === 'I' || event.key === 'i')) {
+      event.preventDefault();
+      setAlertMessage('Ctrl+Shift+I/Cmd+Option+I is disabled during the meeting.');
+    }
+  }
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    if (alertMessage) {
+      const timer = setTimeout(() => setAlertMessage(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [alertMessage]);
+
+  const handleLanguageChange = useCallback((newLanguage: string) => {
+    setLanguage(newLanguage);
+    setOutput('');
+  }, []);
+
+  const handleRunCode = useCallback(() => {
+    socket.emit('runCode', { room: roomId });
+    executeCode();
+  }, [roomId, executeCode]);
+
+  // Chat functionality
+  const handleSendMessage = useCallback(() => {
+    if (messageInput.trim()) {
+      const message: ChatMessage = {
+        sender: 'You', // Replace with actual user name from Stream SDK if available
+        message: messageInput,
+        timestamp: new Date().toISOString(),
+      };
+      socket.emit('chatMessage', { room: roomId, ...message });
+      setMessageInput('');
+    }
+  }, [messageInput, roomId]);
+
+  useEffect(() => {
+    socket.on('chatMessage', (newMessage: ChatMessage) => {
+      setMessages((prev) => [...prev, newMessage]);
+    });
+
+    return () => {
+      socket.off('chatMessage');
+    };
+  }, []);
 
   if (callingState !== CallingState.JOINED) return <Loader />;
 
-  const CallLayout = () => {
+  const CallLayout: React.FC = () => {
     switch (layout) {
-      case 'grid':
-        return <PaginatedGridLayout />;
-      case 'speaker-right':
-        return <SpeakerLayout participantsBarPosition="left" />;
-      default:
-        return <SpeakerLayout participantsBarPosition="right" />;
+      case 'grid': return <PaginatedGridLayout />;
+      case 'speaker-right': return <SpeakerLayout participantsBarPosition="left" />;
+      default: return <SpeakerLayout participantsBarPosition="right" />;
     }
   };
 
@@ -177,34 +291,21 @@ const MeetingRoom = () => {
         >
           <CallLayout />
         </div>
-
-        <div
-          className={cn('h-[calc(100vh-86px)] hidden ml-2', {
-            'show-block': showParticipants && !showCodeEditor,
-          })}
-        >
+        <div className={cn('h-[calc(100vh-86px)] hidden ml-2', {
+          'show-block w-[200px] absolute top-1/2 right-0 transform -translate-y-1/2 flex flex-col overflow-y-auto bg-[#19232d] border-l border-gray-700 z-20': showParticipants && showCodeEditor,
+          'show-block': showParticipants && !showCodeEditor,
+        })}>
           <CallParticipantsList onClose={() => setShowParticipants(false)} />
         </div>
-
-        <div
-          className={cn(
-            'absolute h-[calc(100vh-86px)] w-[75%] bg-[#19232d] p-4 transition-all duration-300 z-20',
-            {
-              'hidden': !showCodeEditor,
-              'flex flex-col top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2': showCodeEditor,
-            }
-          )}
-        >
-          <div className="flex flex-col h-full">
+        <div className={cn(
+          'absolute h-[calc(100vh-86px)] w-[10px] w-[75%] bg-[#19232d] p-4 transition-all duration-300 z-20 flex',
+          { hidden: !showCodeEditor, 'top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2': showCodeEditor }
+        )}>
+          <div className="flex flex-col flex-1 h-full">
             <div className="flex justify-between items-center mb-2">
               <h3 className="text-white">Code Editor</h3>
               <div className="flex items-center gap-2">
-                <select
-                  value={language}
-                  onChange={(e) => handleLanguageChange(e.target.value)}
-                  className="bg-[#0f1419] text-white p-1 rounded"
-                  disabled={isRunning}
-                >
+                <select value={language} onChange={(e) => handleLanguageChange(e.target.value)} className="bg-[#0f1419] text-white p-1 rounded" disabled={isRunning}>
                   <option value="javascript">JavaScript</option>
                   <option value="typescript">TypeScript</option>
                   <option value="python">Python</option>
@@ -213,40 +314,15 @@ const MeetingRoom = () => {
                   <option value="html">HTML</option>
                   <option value="css">CSS</option>
                 </select>
-                <button
-                  onClick={handleRunCode}
-                  className={cn(
-                    'bg-[#0f1419] text-white p-1 rounded hover:bg-[#4c535b]',
-                    { 'opacity-50 cursor-not-allowed': isRunning }
-                  )}
-                  disabled={isRunning}
-                >
+                <button onClick={handleRunCode} className={cn('bg-[#0f1419] text-white p-1 rounded hover:bg-[#4c535b]', { 'opacity-50 cursor-not-allowed': isRunning })} disabled={isRunning}>
                   <Play size={20} />
                 </button>
-                <button
-                  onClick={() => setShowCodeEditor(false)}
-                  className="text-white hover:text-gray-300"
-                  disabled={isRunning}
-                >
-                  ×
-                </button>
+                <button onClick={() => setShowCodeEditor(false)} className="text-white hover:text-gray-300" disabled={isRunning}>×</button>
               </div>
             </div>
             <div className="flex h-[calc(100%-2rem)]">
               <div className="w-1/2 h-full">
-                <Editor
-                  height="100%"
-                  language={language}
-                  value={codeContent}
-                  onChange={(value) => setCodeContent(value || '')}
-                  theme="vs-dark"
-                  options={{
-                    minimap: { enabled: false },
-                    fontSize: 14,
-                    scrollBeyondLastLine: false,
-                    automaticLayout: true,
-                  }}
-                />
+                <Editor height="100%" language={language} value={codeContent} onChange={handleCodeChange} theme="vs-dark" options={{ minimap: { enabled: false }, fontSize: 14, scrollBeyondLastLine: false, automaticLayout: true }} />
               </div>
               <div className="w-1/2 h-full bg-[#0f1419] p-2 rounded overflow-auto">
                 <pre className="text-white font-mono text-sm">{output || 'Run the code to see output'}</pre>
@@ -254,17 +330,43 @@ const MeetingRoom = () => {
             </div>
           </div>
         </div>
+        {/* Chat Panel - Now independent of code editor */}
+        <div className={cn(
+          'absolute top-1/2 right-0 transform -translate-y-1/2 w-[200px] h-[calc(100vh-86px)] flex flex-col overflow-y-auto bg-[#19232d] border-l border-gray-700 z-20',
+          { hidden: !showChat }
+        )}>
+          <div className="p-2 border-b border-gray-600 flex justify-between items-center">
+            <h3 className="text-white text-sm">Chat</h3>
+            <button onClick={() => setShowChat(false)} className="text-white hover:text-gray-300">×</button>
+          </div>
+          <div className="flex-1 p-2 overflow-y-auto">
+            {messages.map((msg, index) => (
+              <div key={index} className="text-white text-sm mb-2">
+                <span className="font-bold">{msg.sender}</span> <span className="text-gray-400 text-xs">{new Date(msg.timestamp).toLocaleTimeString()}</span>
+                <p>{msg.message}</p>
+              </div>
+            ))}
+          </div>
+          <div className="p-2 border-t border-gray-600">
+            <input
+              type="text"
+              value={messageInput}
+              onChange={(e) => setMessageInput(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+              className="w-full bg-[#0f1419] text-white p-1 rounded border border-gray-600 focus:outline-none focus:border-blue-500"
+              placeholder="Type a message..."
+            />
+            <button onClick={handleSendMessage} className="mt-1 w-full bg-blue-500 text-white p-1 rounded hover:bg-blue-600">Send</button>
+          </div>
+        </div>
       </div>
-
-      {/* Custom Alert Message */}
       {alertMessage && (
         <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-red-600 text-white px-4 py-2 rounded shadow-lg z-50">
           {alertMessage}
         </div>
       )}
-
       <div className="fixed bottom-0 flex w-full items-center justify-center gap-5 z-30">
-        <CallControls onLeave={() => router.push(`/`)} />
+        <CallControls onLeave={() => router.push('/')} />
         <DropdownMenu>
           <div className="flex items-center">
             <DropdownMenuTrigger className="cursor-pointer rounded-2xl bg-[#19232d] px-4 py-2 hover:bg-[#4c535b]">
@@ -274,11 +376,7 @@ const MeetingRoom = () => {
           <DropdownMenuContent className="border-dark-1 bg-dark-1 text-white">
             {['Grid', 'Speaker-Left', 'Speaker-Right'].map((item, index) => (
               <div key={index}>
-                <DropdownMenuItem
-                  onClick={() => setLayout(item.toLowerCase() as CallLayoutType)}
-                >
-                  {item}
-                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setLayout(item.toLowerCase() as CallLayoutType)}>{item}</DropdownMenuItem>
                 <DropdownMenuSeparator className="border-dark-1" />
               </div>
             ))}
@@ -294,6 +392,9 @@ const MeetingRoom = () => {
           <div className="cursor-pointer rounded-2xl bg-[#19232d] px-4 py-2 hover:bg-[#4c535b]">
             <Code size={20} className="text-white" />
           </div>
+        </button>
+        <button onClick={() => setShowChat((prev) => !prev)} className="cursor-pointer rounded-2xl bg-[#19232d] px-4 py-2 hover:bg-[#4c535b]">
+          <MessageSquare size={20} className="text-white" />
         </button>
         {!isPersonalRoom && <EndCallButton />}
       </div>
