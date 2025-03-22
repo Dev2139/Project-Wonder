@@ -62,10 +62,11 @@ const MeetingRoom: React.FC = () => {
   };
 
   const handleCodeChange = useCallback((value: string | undefined) => {
+    if (isRunning) return; // Lock editor during execution
     const newCode = value || '';
     setCodeContent(newCode);
     socket.emit('codeChange', { room: roomId, code: newCode });
-  }, [roomId]);
+  }, [roomId, isRunning]);
 
   const executeCode = useCallback(async () => {
     if (!codeContent.trim()) {
@@ -132,104 +133,162 @@ const MeetingRoom: React.FC = () => {
       socket.off('outputUpdate', handleOutputUpdate);
       socket.off('runCode', handleRunCode);
     };
-  }, [roomId]);
+  }, [roomId, executeCode]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-    // Block Escape key (exits fullscreen or closes dialogs)
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      setAlertMessage('Escape key is disabled during the meeting.');
-    }
+      // Block Ctrl+Tab
+      if (event.ctrlKey && event.key === 'Tab') {
+        event.preventDefault();
+        setAlertMessage('Ctrl+Tab is disabled during the meeting.');
+        return;
+      }
 
-    // Block F11 (toggles fullscreen)
-    if (event.key === 'F11') {
-      event.preventDefault();
-      setAlertMessage('F11 key is disabled during the meeting.');
-    }
+      // Block Alt+Tab
+      if (event.altKey && event.key === 'Tab') {
+        event.preventDefault();
+        setAlertMessage('Alt+Tab is disabled during the meeting (browser may override).');
+        return;
+      }
 
-    // Block Alt+Tab (switch tabs/apps, may not work due to OS-level handling)
-    if (event.altKey && event.key === 'Tab') {
-      event.preventDefault();
-      setAlertMessage('Alt+Tab is disabled during the meeting (browser may override).');
-    }
+      // Block Cmd+Tab on macOS
+      if (event.metaKey && event.key === 'Tab') {
+        event.preventDefault();
+        setAlertMessage('Cmd+Tab is disabled during the meeting (browser may override).');
+        return;
+      }
 
-    // Block Ctrl+Tab (switch tabs)
-    if (event.ctrlKey && event.key === 'Tab') {
-      event.preventDefault();
-      setAlertMessage('Ctrl+Tab is disabled during the meeting.');
-    }
+      // Block Tab key
+      if (event.key === 'Tab') {
+        event.preventDefault();
+        setAlertMessage('Tab key is disabled during the meeting.');
+      }
 
-    // Block Cmd+Tab on macOS (switch apps, may not work due to OS-level handling)
-    if (event.metaKey && event.key === 'Tab') {
-      event.preventDefault();
-      setAlertMessage('Cmd+Tab is disabled during the meeting (browser may override).');
-    }
+      // Block Escape key
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setAlertMessage('Escape key is disabled during the meeting.');
+      }
 
-    // Block Alt+F4 (close window, may not work in all browsers)
-    if (event.altKey && event.key === 'F4') {
-      event.preventDefault();
-      setAlertMessage('Alt+F4 is disabled during the meeting.');
-    }
+      // Block F11
+      if (event.key === 'F11') {
+        event.preventDefault();
+        setAlertMessage('F11 key is disabled during the meeting.');
+      }
 
-    // Block Ctrl+W or Cmd+W (close tab/window)
-    if ((event.ctrlKey || event.metaKey) && event.key === 'w') {
-      event.preventDefault();
-      setAlertMessage('Ctrl+W/Cmd+W is disabled during the meeting.');
-    }
+      // Block Alt+F4
+      if (event.altKey && event.key === 'F4') {
+        event.preventDefault();
+        setAlertMessage('Alt+F4 is disabled during the meeting.');
+      }
 
-    // Block Ctrl+T or Cmd+T (new tab)
-    if ((event.ctrlKey || event.metaKey) && event.key === 't') {
-      event.preventDefault();
-      setAlertMessage('Ctrl+T/Cmd+T is disabled during the meeting.');
-    }
+      // Block Ctrl+W or Cmd+W
+      if ((event.ctrlKey || event.metaKey) && event.key === 'w') {
+        event.preventDefault();
+        setAlertMessage('Ctrl+W/Cmd+W is disabled during the meeting.');
+      }
 
-    // Block Ctrl+N or Cmd+N (new window)
-    if ((event.ctrlKey || event.metaKey) && event.key === 'n') {
-      event.preventDefault();
-      setAlertMessage('Ctrl+N/Cmd+N is disabled during the meeting.');
-    }
+      // Block Ctrl+T or Cmd+T
+      if ((event.ctrlKey || event.metaKey) && event.key === 't') {
+        event.preventDefault();
+        setAlertMessage('Ctrl+T/Cmd+T is disabled during the meeting.');
+      }
 
-    // Block Ctrl+R or Cmd+R (refresh page)
-    if ((event.ctrlKey || event.metaKey) && event.key === 'r') {
-      event.preventDefault();
-      setAlertMessage('Ctrl+R/Cmd+R is disabled during the meeting.');
-    }
+      // Block Ctrl+N or Cmd+N
+      if ((event.ctrlKey || event.metaKey) && event.key === 'n') {
+        event.preventDefault();
+        setAlertMessage('Ctrl+N/Cmd+N is disabled during the meeting.');
+      }
 
-    // Block F5 (refresh page)
-    if (event.key === 'F5') {
-      event.preventDefault();
-      setAlertMessage('F5 key is disabled during the meeting.');
-    }
+      // Block Ctrl+R or Cmd+R
+      if ((event.ctrlKey || event.metaKey) && event.key === 'r') {
+        event.preventDefault();
+        setAlertMessage('Ctrl+R/Cmd+R is disabled during the meeting.');
+      }
 
-    // Block Ctrl+Shift+T or Cmd+Shift+T (reopen closed tab)
-    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'T') {
-      event.preventDefault();
-      setAlertMessage('Ctrl+Shift+T/Cmd+Shift+T is disabled during the meeting.');
-    }
+      // Block F5
+      if (event.key === 'F5') {
+        event.preventDefault();
+        setAlertMessage('F5 key is disabled during the meeting.');
+      }
 
-    // Block Ctrl+Shift+N or Cmd+Shift+N (new incognito window)
-    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'N') {
-      event.preventDefault();
-      setAlertMessage('Ctrl+Shift+N/Cmd+Shift+N is disabled during the meeting.');
-    }
+      // Block Ctrl+Shift+T or Cmd+Shift+T
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'T') {
+        event.preventDefault();
+        setAlertMessage('Ctrl+Shift+T/Cmd+Shift+T is disabled during the meeting.');
+      }
 
-    // Block Windows key (or Cmd on macOS) to prevent opening Start menu or Spotlight
-    if (event.key === 'Meta' || event.metaKey) {
-      event.preventDefault();
-      setAlertMessage('Windows/Cmd key is disabled during the meeting.');
-    }
+      // Block Ctrl+Shift+N or Cmd+Shift+N
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'N') {
+        event.preventDefault();
+        setAlertMessage('Ctrl+Shift+N/Cmd+Shift+N is disabled during the meeting.');
+      }
 
-    // Block Ctrl+Shift+I or Cmd+Option+I (open developer tools)
-    if ((event.ctrlKey || event.metaKey) && event.shiftKey && (event.key === 'I' || event.key === 'i')) {
+      // Block Windows/Cmd key
+      if (event.key === 'Meta' || event.metaKey) {
+        event.preventDefault();
+        setAlertMessage('Windows/Cmd key is disabled during the meeting.');
+      }
+
+      // Block Ctrl+Shift+I or Cmd+Option+I
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && (event.key === 'I' || event.key === 'i')) {
+        event.preventDefault();
+        setAlertMessage('Ctrl+Shift+I/Cmd+Option+I is disabled during the meeting.');
+      }
+
+      // Block Copy (Ctrl+C or Cmd+C)
+      if ((event.ctrlKey || event.metaKey) && event.key === 'c') {
+        event.preventDefault();
+        setAlertMessage('Copying is disabled during the meeting.');
+      }
+
+      // Block Paste (Ctrl+V or Cmd+V)
+      if ((event.ctrlKey || event.metaKey) && event.key === 'v') {
+        event.preventDefault();
+        setAlertMessage('Pasting is disabled during the meeting.');
+      }
+
+      // Block Cut (Ctrl+X or Cmd+X)
+      if ((event.ctrlKey || event.metaKey) && event.key === 'x') {
+        event.preventDefault();
+        setAlertMessage('Cutting is disabled during the meeting.');
+      }
+    };
+
+    // Block right-click
+    const handleContextMenu = (event: MouseEvent) => {
       event.preventDefault();
-      setAlertMessage('Ctrl+Shift+I/Cmd+Option+I is disabled during the meeting.');
-    }
-  }
+      setAlertMessage('Right-click is disabled during the meeting.');
+    };
+
+    // Monitor window focus and notify all users
+    const handleBlur = () => {
+      socket.emit('tabSwitch', { room: roomId, user: 'You' }); // Emit tab switch event
+    };
+
+    const handleFocus = () => {
+      setAlertMessage(null);
+    };
+
+    // Listen for tab switch notifications from other users
+    const handleTabSwitchNotification = ({ user }: { user: string }) => {
+      setAlertMessage(`${user} has switched tabs.`);
+    };
 
     document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, []);
+    document.addEventListener('contextmenu', handleContextMenu);
+    window.addEventListener('blur', handleBlur);
+    window.addEventListener('focus', handleFocus);
+    socket.on('tabSwitchNotification', handleTabSwitchNotification);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('contextmenu', handleContextMenu);
+      window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('focus', handleFocus);
+      socket.off('tabSwitchNotification', handleTabSwitchNotification);
+    };
+  }, [roomId]);
 
   useEffect(() => {
     if (alertMessage) {
@@ -252,7 +311,7 @@ const MeetingRoom: React.FC = () => {
   const handleSendMessage = useCallback(() => {
     if (messageInput.trim()) {
       const message: ChatMessage = {
-        sender: 'You', // Replace with actual user name from Stream SDK if available
+        sender: 'You',
         message: messageInput,
         timestamp: new Date().toISOString(),
       };
@@ -274,6 +333,20 @@ const MeetingRoom: React.FC = () => {
   if (callingState !== CallingState.JOINED) return <Loader />;
 
   const CallLayout: React.FC = () => {
+    const { useParticipants } = useCallStateHooks();
+    const participants = useParticipants();
+    
+    if (showCodeEditor) {
+      const organizer = participants.find(p => p.isLocalParticipant) || participants[0];
+      return (
+        <SpeakerLayout 
+          participantsBarPosition="right"
+          numberOfParticipants={1}
+          pinnedParticipants={organizer ? [organizer.sessionId] : undefined}
+        />
+      );
+    }
+
     switch (layout) {
       case 'grid': return <PaginatedGridLayout />;
       case 'speaker-right': return <SpeakerLayout participantsBarPosition="left" />;
@@ -298,8 +371,11 @@ const MeetingRoom: React.FC = () => {
           <CallParticipantsList onClose={() => setShowParticipants(false)} />
         </div>
         <div className={cn(
-          'absolute h-[calc(100vh-86px)] w-[10px] w-[75%] bg-[#19232d] p-4 transition-all duration-300 z-20 flex',
-          { hidden: !showCodeEditor, 'top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2': showCodeEditor }
+          'absolute bg-[#19232d] p-4 transition-all duration-300 z-20 flex',
+          { 
+            hidden: !showCodeEditor, 
+            'left-2 w-[78%] h-[90%] top-2': showCodeEditor 
+          }
         )}>
           <div className="flex flex-col flex-1 h-full">
             <div className="flex justify-between items-center mb-2">
@@ -322,7 +398,22 @@ const MeetingRoom: React.FC = () => {
             </div>
             <div className="flex h-[calc(100%-2rem)]">
               <div className="w-1/2 h-full">
-                <Editor height="100%" language={language} value={codeContent} onChange={handleCodeChange} theme="vs-dark" options={{ minimap: { enabled: false }, fontSize: 14, scrollBeyondLastLine: false, automaticLayout: true }} />
+                <Editor 
+                  height="100%" 
+                  language={language} 
+                  value={codeContent} 
+                  onChange={handleCodeChange} 
+                  theme="vs-dark" 
+                  options={{ 
+                    minimap: { enabled: false }, 
+                    fontSize: 14, 
+                    scrollBeyondLastLine: false, 
+                    automaticLayout: true,
+                    contextmenu: false, // Disable right-click context menu
+                    copyWithSyntaxHighlighting: false, // Disable copying with formatting
+                    paste: false, // Disable pasting into editor
+                  }} 
+                />
               </div>
               <div className="w-1/2 h-full bg-[#0f1419] p-2 rounded overflow-auto">
                 <pre className="text-white font-mono text-sm">{output || 'Run the code to see output'}</pre>
@@ -330,10 +421,13 @@ const MeetingRoom: React.FC = () => {
             </div>
           </div>
         </div>
-        {/* Chat Panel - Now independent of code editor */}
         <div className={cn(
-          'absolute top-1/2 right-0 transform -translate-y-1/2 w-[200px] h-[calc(100vh-86px)] flex flex-col overflow-y-auto bg-[#19232d] border-l border-gray-700 z-20',
-          { hidden: !showChat }
+          'absolute right-4 w-[300px] flex flex-col overflow-y-auto bg-[#19232d] border-l border-gray-700 z-20 transition-all duration-300',
+          { 
+            hidden: !showChat,
+            'top-1/2 -translate-y-1/2 h-[calc(100vh-86px)]': !showCodeEditor && showChat,
+            'top-[220px] h-[calc(100vh-320px)]': showCodeEditor && showChat
+          }
         )}>
           <div className="p-2 border-b border-gray-600 flex justify-between items-center">
             <h3 className="text-white text-sm">Chat</h3>
