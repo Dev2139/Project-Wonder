@@ -1,6 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   CallControls,
   CallParticipantsList,
