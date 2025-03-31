@@ -1,8 +1,6 @@
 'use client';
+import React, { useState, useEffect, useCallback } from 'react';
 
-// Add React import to fix the React reference error
-import React from 'react';
-import { useState, useEffect, useCallback } from 'react';
 import {
   CallControls,
   CallParticipantsList,
